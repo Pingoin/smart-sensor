@@ -1,0 +1,3 @@
+[raum-sensor]
+wifi_ssid = "SSID"
+wifi_psk = "PASSWORD"
