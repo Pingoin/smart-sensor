@@ -9,6 +9,9 @@ use embedded_io::blocking::*;
 use embedded_svc::ipv4::{Interface,Ipv4Addr,Subnet,Mask};
 use embedded_svc::wifi::{AccessPointInfo, ClientConfiguration, Configuration, Wifi};
 
+
+use hal::IO;
+use hal::i2c::I2C;
 use esp_backtrace as _;
 use esp_println::logger::init_logger;
 use esp_println::{print, println};
@@ -19,6 +22,7 @@ use esp_wifi::{current_millis, initialize};
 use hal::clock::{ClockControl, CpuClock};
 use hal::{pac::Peripherals, prelude::*, Rtc};
 use smoltcp::wire::Ipv4Address;
+use bme280_multibus::{ Bme280, Sample};
 
 use gmqtt::{
     control_packet::{
@@ -55,7 +59,7 @@ fn main() -> ! {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let system = peripherals.DPORT.split();
+    let mut  system = peripherals.DPORT.split();
 
     let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock240MHz).freeze();
 
@@ -139,6 +143,32 @@ fn main() -> ! {
     let mut tx_buffer = [0u8; 1536];
     let mut socket = network.get_socket(&mut rx_buffer, &mut tx_buffer);
 
+
+    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
+        // Create a new peripheral object with the described wiring
+    // and standard I2C clock speed
+    let mut i2c = I2C::new(
+        peripherals.I2C0,
+        io.pins.gpio21,
+        io.pins.gpio22,
+        100u32.kHz(),
+        &mut system.peripheral_clock_control,
+        &clocks,
+    );
+// initialize the BME280 using the primary I2C address 0x76
+let mut bme = Bme280::from_i2c(i2c,bme280_multibus::i2c::Address::SdoGnd).unwrap();
+
+const SETTINGS: bme280_multibus::Settings = bme280_multibus::Settings {
+    config: bme280_multibus::Config::reset()
+        .set_standby_time(bme280_multibus::Standby::Millis1000)
+        .set_filter(bme280_multibus::Filter::X16),
+    ctrl_meas: bme280_multibus::CtrlMeas::reset()
+        .set_osrs_t(bme280_multibus::Oversampling::X8)
+        .set_osrs_p(bme280_multibus::Oversampling::X8)
+        .set_mode(bme280_multibus::Mode::Normal),
+    ctrl_hum: bme280_multibus::Oversampling::X8,
+};
+bme.settings(&SETTINGS).unwrap();
     loop {
         println!("Making HTTP request");
         socket.work();
@@ -187,6 +217,8 @@ fn main() -> ! {
                 break;
             }
         }
+        let sample: Sample = bme.sample().unwrap();
+        println!("Hum: {}, Pres {}, Temp {}",sample.humidity,sample.pressure/100.0,sample.temperature);
         println!();
 
         let pub_pack = Packet::Publish(Publish {
