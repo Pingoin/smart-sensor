@@ -29,8 +29,8 @@ toml-cfg = "0.1"
 esp-println = { version = "0.3.1", features = [ "esp32", "log" ] }
 gmqtt = "0.1.1"
 esp-backtrace = { version = "0.4.0", features = [ "esp32", "panic-handler", "exception-handler", "print-uart" ] }
-bme280-multibus = {version="0.2.2"}
-
+bme280-multibus = {version="0.2.2",features=["serde"]}
+serde-json-core = "0.5.0"
 
 [dev-dependencies]
 bleps = { git = "https://github.com/bjoernQ/bleps", package = "bleps" }

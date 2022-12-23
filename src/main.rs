@@ -6,12 +6,10 @@
 use esp32_hal as hal;
 
 use embedded_io::blocking::*;
-use embedded_svc::ipv4::{Interface,Ipv4Addr,Subnet,Mask};
+use embedded_svc::ipv4::{Interface, Ipv4Addr, Mask, Subnet};
 use embedded_svc::wifi::{AccessPointInfo, ClientConfiguration, Configuration, Wifi};
 
-
-use hal::IO;
-use hal::i2c::I2C;
+use bme280_multibus::{Bme280, Sample};
 use esp_backtrace as _;
 use esp_println::logger::init_logger;
 use esp_println::{print, println};
@@ -20,16 +18,15 @@ use esp_wifi::wifi_interface::{Network, WifiError};
 use esp_wifi::{create_network_stack_storage, network_stack_storage};
 use esp_wifi::{current_millis, initialize};
 use hal::clock::{ClockControl, CpuClock};
+use hal::i2c::I2C;
+use hal::IO;
 use hal::{pac::Peripherals, prelude::*, Rtc};
 use smoltcp::wire::Ipv4Address;
-use bme280_multibus::{ Bme280, Sample};
+use serde_json_core::ser;
 
 use gmqtt::{
-    control_packet::{
-        connect::{ConnectProperties},
-        Connect, Packet, Publish,
-    },
-   write_packet,
+    control_packet::{connect::ConnectProperties, Connect, Packet, Publish},
+    write_packet,
 };
 
 const MAX_MQTT_PACKET_SIZE: u32 = 1024;
@@ -50,6 +47,8 @@ pub struct Config {
     wifi_gateway: &'static str,
     #[default("")]
     mqtt_broker: &'static str,
+    #[default("hello/world")]
+    mqtt_topic: &'static str,
 }
 
 #[entry]
@@ -59,7 +58,7 @@ fn main() -> ! {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let mut  system = peripherals.DPORT.split();
+    let mut system = peripherals.DPORT.split();
 
     let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock240MHz).freeze();
 
@@ -127,7 +126,7 @@ fn main() -> ! {
         .set_iface_configuration(&embedded_svc::ipv4::Configuration::Client(
             embedded_svc::ipv4::ClientConfiguration::Fixed(embedded_svc::ipv4::ClientSettings {
                 ip: Ipv4Addr::from(parse_ip(app_config.wifi_ip)),
-                subnet:Subnet {
+                subnet: Subnet {
                     gateway: Ipv4Addr::from(parse_ip(app_config.wifi_gateway)),
                     mask: Mask(24),
                 },
@@ -143,11 +142,10 @@ fn main() -> ! {
     let mut tx_buffer = [0u8; 1536];
     let mut socket = network.get_socket(&mut rx_buffer, &mut tx_buffer);
 
-
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-        // Create a new peripheral object with the described wiring
+    // Create a new peripheral object with the described wiring
     // and standard I2C clock speed
-    let mut i2c = I2C::new(
+    let i2c = I2C::new(
         peripherals.I2C0,
         io.pins.gpio21,
         io.pins.gpio22,
@@ -155,26 +153,30 @@ fn main() -> ! {
         &mut system.peripheral_clock_control,
         &clocks,
     );
-// initialize the BME280 using the primary I2C address 0x76
-let mut bme = Bme280::from_i2c(i2c,bme280_multibus::i2c::Address::SdoGnd).unwrap();
+    // initialize the BME280 using the primary I2C address 0x76
+    let mut bme = Bme280::from_i2c(i2c, bme280_multibus::i2c::Address::SdoGnd).unwrap();
 
-const SETTINGS: bme280_multibus::Settings = bme280_multibus::Settings {
-    config: bme280_multibus::Config::reset()
-        .set_standby_time(bme280_multibus::Standby::Millis1000)
-        .set_filter(bme280_multibus::Filter::X16),
-    ctrl_meas: bme280_multibus::CtrlMeas::reset()
-        .set_osrs_t(bme280_multibus::Oversampling::X8)
-        .set_osrs_p(bme280_multibus::Oversampling::X8)
-        .set_mode(bme280_multibus::Mode::Normal),
-    ctrl_hum: bme280_multibus::Oversampling::X8,
-};
-bme.settings(&SETTINGS).unwrap();
+    const SETTINGS: bme280_multibus::Settings = bme280_multibus::Settings {
+        config: bme280_multibus::Config::reset()
+            .set_standby_time(bme280_multibus::Standby::Millis1000)
+            .set_filter(bme280_multibus::Filter::X16),
+        ctrl_meas: bme280_multibus::CtrlMeas::reset()
+            .set_osrs_t(bme280_multibus::Oversampling::X8)
+            .set_osrs_p(bme280_multibus::Oversampling::X8)
+            .set_mode(bme280_multibus::Mode::Normal),
+        ctrl_hum: bme280_multibus::Oversampling::X8,
+    };
+    bme.settings(&SETTINGS).unwrap();
+
     loop {
         println!("Making HTTP request");
         socket.work();
 
         socket
-            .open(Ipv4Address::from_bytes(&parse_ip(app_config.mqtt_broker)), 1883)
+            .open(
+                Ipv4Address::from_bytes(&parse_ip(app_config.mqtt_broker)),
+                1883,
+            )
             .unwrap();
 
         let keep_alive: u16 = 60; // 60 seconds
@@ -198,7 +200,7 @@ bme.settings(&SETTINGS).unwrap();
 
         socket.write(&buffer[..len]).unwrap();
         socket.flush().unwrap();
-
+         
         let wait_end = current_millis() + 2 * 1000;
         loop {
             let mut buffer = [0u8; 512];
@@ -216,30 +218,40 @@ bme.settings(&SETTINGS).unwrap();
                 println!("Timeout");
                 break;
             }
+        }let sample: Sample = bme.sample().unwrap();
+        println!("bla");
+        match ser::to_string::<bme280_multibus::Sample,200>(&sample){
+            Ok(result)=>println!("{}",result),
+            Err(err)=>println!("{}",err),
+        };
+   
+        let mut payload=[0u8;200];
+        let mut payload_len=0usize;
+        match ser::to_slice(&sample, &mut payload){
+            Ok(len)=>payload_len=len,
+            Err(err)=>{
+                println!("{}",err);
+            },
         }
-        let sample: Sample = bme.sample().unwrap();
-        println!("Hum: {}, Pres {}, Temp {}",sample.humidity,sample.pressure/100.0,sample.temperature);
+       
         println!();
 
         let pub_pack = Packet::Publish(Publish {
             dup: false,
-            qospid: gmqtt::QosPid::AtMostOnce ,
+            qospid: gmqtt::QosPid::AtMostOnce,
             retain: false,
-            topic: "Hello/World",
+            topic: app_config.mqtt_topic,
             properties: None,
-            payload: b"Hi",
+            payload: &payload[..payload_len],
         });
         let mut buffer = [0x00u8; MAX_MQTT_PACKET_SIZE as usize];
-
 
         let len = write_packet(&pub_pack, &mut buffer).unwrap();
 
         socket.write(&buffer[..len]).unwrap();
         socket.flush().unwrap();
-        
+
         socket.disconnect();
-
-
 
         let wait_end = current_millis() + 5 * 1000;
         while current_millis() < wait_end {
@@ -247,7 +259,6 @@ bme.settings(&SETTINGS).unwrap();
         }
     }
 }
-
 
 fn parse_ip(ip: &str) -> [u8; 4] {
     let mut result = [0u8; 4];
