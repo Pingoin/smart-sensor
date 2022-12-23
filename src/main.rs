@@ -21,8 +21,8 @@ use hal::clock::{ClockControl, CpuClock};
 use hal::i2c::I2C;
 use hal::IO;
 use hal::{pac::Peripherals, prelude::*, Rtc};
-use smoltcp::wire::Ipv4Address;
 use serde_json_core::ser;
+use smoltcp::wire::Ipv4Address;
 
 use gmqtt::{
     control_packet::{connect::ConnectProperties, Connect, Packet, Publish},
@@ -169,7 +169,7 @@ fn main() -> ! {
     bme.settings(&SETTINGS).unwrap();
 
     loop {
-        println!("Making HTTP request");
+        println!("{}", current_millis() / 1000);
         socket.work();
 
         socket
@@ -200,7 +200,7 @@ fn main() -> ! {
 
         socket.write(&buffer[..len]).unwrap();
         socket.flush().unwrap();
-         
+
         let wait_end = current_millis() + 2 * 1000;
         loop {
             let mut buffer = [0u8; 512];
@@ -218,22 +218,18 @@ fn main() -> ! {
                 println!("Timeout");
                 break;
             }
-        }let sample: Sample = bme.sample().unwrap();
-        println!("bla");
-        match ser::to_string::<bme280_multibus::Sample,200>(&sample){
-            Ok(result)=>println!("{}",result),
-            Err(err)=>println!("{}",err),
-        };
-   
-        let mut payload=[0u8;200];
-        let mut payload_len=0usize;
-        match ser::to_slice(&sample, &mut payload){
-            Ok(len)=>payload_len=len,
-            Err(err)=>{
-                println!("{}",err);
-            },
         }
-       
+        let mut sample: Sample = bme.sample().unwrap();
+        sample.pressure = sample.pressure / 100.0;
+        let mut payload = [0u8; 200];
+        let mut payload_len = 0usize;
+        match ser::to_slice(&sample, &mut payload) {
+            Ok(len) => payload_len = len,
+            Err(err) => {
+                println!("{}", err);
+            }
+        }
+
         println!();
 
         let pub_pack = Packet::Publish(Publish {
