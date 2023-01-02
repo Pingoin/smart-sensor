@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+ 501035	   6108	 101876	 609019	  94afb	target/xtensa-esp32-none-elf/release/raum-sensor
