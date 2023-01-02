@@ -20,7 +20,7 @@ use esp_wifi::{current_millis, initialize};
 use hal::clock::{ClockControl, CpuClock};
 use hal::i2c::I2C;
 use hal::IO;
-use hal::{pac::Peripherals, prelude::*, Rtc};
+use hal::{pac::Peripherals, prelude::*, Rtc,Delay};
 use serde_json_core::ser;
 use smoltcp::wire::Ipv4Address;
 
@@ -65,6 +65,10 @@ fn main() -> ! {
 
     let mut rtc = Rtc::new(peripherals.RTC_CNTL);
 
+
+        // Initialize the Delay peripheral, and use it to toggle the LED state in a
+    // loop.
+    let mut delay = Delay::new(&clocks);
     rtc.rwdt.disable();
 
     let mut storage = create_network_stack_storage!(3, 8, 1, 1);
@@ -111,6 +115,9 @@ fn main() -> ! {
             Ok(connected) => {
                 if connected {
                     break;
+                }else{
+                    print!(".");
+                    delay.delay_ms(100u32);
                 }
             }
             Err(err) => {
